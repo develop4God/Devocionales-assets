@@ -180,16 +180,41 @@ def human_size(num_bytes: int) -> str:
     return f"{num_bytes:.1f}TB"
 
 
-def convert_to_avif(filenames: list[str], folder: Path) -> Path:
-    """Convert PNGs to AVIF in-place (same folder, no subfolder)."""
+def convert_to_avif(filenames: list[str], folder: Path, dry_run: bool = False) -> Path:
+    """Convert PNGs to AVIF in-place (same folder, no subfolder).
+    Skips files whose .avif already exists and is newer than the source PNG.
+    """
     if not shutil.which("avifenc"):
         print("\n✗ avifenc not found on PATH. Install it first (e.g. `sudo apt install libavif-bin`).")
         sys.exit(1)
 
-    print(f"\n→ Converting {len(filenames)} PNGs to AVIF (speed 0, qcolor 75, qalpha 75, yuv444)...")
+    to_convert = []
+    skipped = []
     for name in filenames:
         src = folder / name
         dst = folder / (Path(name).stem + ".avif")
+        if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
+            skipped.append(name)
+        else:
+            to_convert.append(name)
+
+    if skipped:
+        print(f"\n→ Skipping {len(skipped)} unchanged PNG(s) (AVIF already up to date):")
+        for name in skipped:
+            print(f"  ⊘ {name}")
+
+    if not to_convert:
+        print("\n(No PNGs need conversion.)")
+        return folder
+
+    verb = "Would convert" if dry_run else "Converting"
+    print(f"\n→ {verb} {len(to_convert)} PNGs to AVIF (speed 0, qcolor 75, qalpha 75, yuv444)...")
+    for name in to_convert:
+        src = folder / name
+        dst = folder / (Path(name).stem + ".avif")
+        if dry_run:
+            print(f"  → {name} -> {dst.name} (dry-run, skipped)")
+            continue
         cmd = [
             "avifenc",
             "--speed", "0",
@@ -298,7 +323,7 @@ def check_repo_wide_pending(repo_root: Path, folder: Path):
             sys.exit(1)
 
 
-def git_commit_and_push(folder: Path, encounter_id: str):
+def git_commit_and_push(folder: Path, encounter_id: str, dry_run: bool = False):
     repo_root = git_repo_root(folder)
     if repo_root is None:
         print("\n(Skipping git commit — folder is not inside a git repo.)")
@@ -328,6 +353,10 @@ def git_commit_and_push(folder: Path, encounter_id: str):
     for line in file_lines:
         print(line)
     print(f"\n→ Commit message:\n  {message}")
+
+    if dry_run:
+        print("\n(Dry run — stopping before add/commit/push.)")
+        return
 
     confirm = input(f"\nCommit & push to origin/{branch}? [Y/n]: ").strip().lower()
     if confirm not in ("", "y", "yes"):
@@ -381,7 +410,13 @@ def cmd_convert(args, filenames: list[str] | None = None):
             print("✗ No PNG files found in folder.")
             sys.exit(1)
 
-    out_dir = convert_to_avif(filenames, folder)
+    dry_run = getattr(args, "dry_run", False)
+    out_dir = convert_to_avif(filenames, folder, dry_run=dry_run)
+
+    if dry_run:
+        print("\n(Dry run — skipping reverse validation.)")
+        return
+
     all_ok = reverse_validate_and_stats(filenames, folder, out_dir)
 
     if not all_ok:
@@ -394,7 +429,7 @@ def cmd_commit(args):
     if not folder.is_dir():
         print(f"✗ Folder not found: {folder}")
         sys.exit(1)
-    git_commit_and_push(folder, folder.name)
+    git_commit_and_push(folder, folder.name, dry_run=getattr(args, "dry_run", False))
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -402,19 +437,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.set_defaults(repo=None, branch=None, path=None, folder=None)
     sub = p.add_subparsers(dest="phase")
 
-    def add_common(sp, needs_folder=True, needs_source=True):
+    def add_common(sp, needs_folder=True, needs_source=True, dry_run=False):
         if needs_source:
             sp.add_argument("--repo", help="GitHub repo, e.g. develop4God/devocionales-json")
             sp.add_argument("--branch", help="Branch name")
             sp.add_argument("--path", help="Path to JSON file within repo")
         if needs_folder:
             sp.add_argument("--folder", help="Local images folder path")
+        if dry_run:
+            sp.add_argument("--dry-run", action="store_true", help="Preview actions without executing them")
 
-    add_common(sub.add_parser("all", help="Run fetch -> compare -> convert -> commit"))
+    add_common(sub.add_parser("all", help="Run fetch -> compare -> convert -> commit"), dry_run=True)
     add_common(sub.add_parser("fetch", help="Fetch the encounter JSON only"), needs_folder=False)
     add_common(sub.add_parser("compare", help="Validate local folder against JSON image_url list"))
-    add_common(sub.add_parser("convert", help="Convert PNGs to AVIF + reverse-validate"))
-    add_common(sub.add_parser("commit", help="Commit + push an already-converted folder"), needs_source=False)
+    add_common(sub.add_parser("convert", help="Convert PNGs to AVIF + reverse-validate"), dry_run=True)
+    add_common(sub.add_parser("commit", help="Commit + push an already-converted folder"), needs_source=False, dry_run=True)
 
     return p
 
@@ -450,6 +487,9 @@ def main():
     data = fetch_json(args.repo, args.branch, args.path)
     filenames = cmd_compare(args, data=data)
     cmd_convert(args, filenames=filenames)
+    if getattr(args, "dry_run", False):
+        print("\n(Dry run — skipping commit phase.)")
+        return
     cmd_commit(args)
 
 
