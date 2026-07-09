@@ -277,11 +277,34 @@ def describe_status(status: str) -> list[str]:
     return lines
 
 
+
+def check_repo_wide_pending(repo_root: Path, folder: Path):
+    """Warn if there are git changes outside the target folder."""
+    status = subprocess.run(
+        ["git", "-C", str(repo_root), "status", "--porcelain", "-uall"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    if not status:
+        return
+    folder_rel = str(folder.relative_to(repo_root))
+    outside = [line for line in status.splitlines() if not line[3:].startswith(folder_rel)]
+    if outside:
+        print(f"\n⚠ WARNING: {len(outside)} change(s) exist OUTSIDE {folder_rel}:")
+        for line in describe_status("\n".join(outside)):
+            print(line)
+        confirm = input("\nThese will NOT be included, but they're sitting pending. Continue anyway? [y/N]: ").strip().lower()
+        if confirm not in ("y", "yes"):
+            print("Aborted.")
+            sys.exit(1)
+
+
 def git_commit_and_push(folder: Path, encounter_id: str):
     repo_root = git_repo_root(folder)
     if repo_root is None:
         print("\n(Skipping git commit — folder is not inside a git repo.)")
         return
+
+    check_repo_wide_pending(repo_root, folder)
 
     branch = subprocess.run(
         ["git", "-C", str(repo_root), "branch", "--show-current"],
