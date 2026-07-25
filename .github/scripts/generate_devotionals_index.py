@@ -6,14 +6,14 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-HABITUS_DIR = 'images/habitus'
-INDEX_PATH = os.path.join(HABITUS_DIR, 'index.json')
+DEVOTIONALS_DIR = 'images/devotionals'
+INDEX_PATH = os.path.join(DEVOTIONALS_DIR, 'index.json')
 
 
 def list_real_files():
     return sorted(
-        f for f in os.listdir(HABITUS_DIR)
-        if os.path.isfile(os.path.join(HABITUS_DIR, f)) and f != 'index.json'
+        f for f in os.listdir(DEVOTIONALS_DIR)
+        if os.path.isfile(os.path.join(DEVOTIONALS_DIR, f)) and f != 'index.json'
     )
 
 
@@ -48,7 +48,7 @@ def validate_orientation(files):
     with no overlap. Revisit if that assumption stops holding."""
     bad = []
     for f in files:
-        w, h = get_dimensions(os.path.join(HABITUS_DIR, f))
+        w, h = get_dimensions(os.path.join(DEVOTIONALS_DIR, f))
         if w <= h:
             bad.append((f, w, h))
     return bad

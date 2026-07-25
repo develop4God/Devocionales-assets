@@ -1,17 +1,17 @@
-name: Update habitus image index
+name: Update devotionals image index
 
 on:
   push:
     branches: [main]
     paths:
-      - 'images/habitus/**'
-      - '.github/scripts/generate_habitus_index.py'
-      - '.github/workflows/habitus-index.yml'
+      - 'images/devotionals/**'
+      - '.github/scripts/generate_devotionals_index.py'
+      - '.github/workflows/devotionals-index.yml'
   pull_request:
     paths:
-      - 'images/habitus/**'
-      - '.github/scripts/generate_habitus_index.py'
-      - '.github/workflows/habitus-index.yml'
+      - 'images/devotionals/**'
+      - '.github/scripts/generate_devotionals_index.py'
+      - '.github/workflows/devotionals-index.yml'
   workflow_dispatch: {}
 
 jobs:
@@ -27,8 +27,8 @@ jobs:
       - name: Install libavif (avifdec, used for orientation validation)
         run: sudo apt-get update && sudo apt-get install -y libavif-bin
 
-      - name: Regenerate and validate images/habitus/index.json
-        run: python3 .github/scripts/generate_habitus_index.py
+      - name: Regenerate and validate images/devotionals/index.json
+        run: python3 .github/scripts/generate_devotionals_index.py
 
       # PRs only need the validation above (orientation gate, reverse
       # validation) to catch a bad image before merge — they can't safely
@@ -38,12 +38,12 @@ jobs:
       - name: Commit if changed
         if: github.event_name != 'pull_request'
         run: |
-          if git diff --quiet -- images/habitus/index.json; then
+          if git diff --quiet -- images/devotionals/index.json; then
             echo "No changes to commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add images/habitus/index.json
-          git commit -m "chore: regenerate images/habitus/index.json [skip ci]"
+          git add images/devotionals/index.json
+          git commit -m "chore: regenerate images/devotionals/index.json [skip ci]"
           git push
