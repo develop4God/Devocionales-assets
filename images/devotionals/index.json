@@ -1,6 +1,6 @@
 {
-  "version": "0f56ce4b9383",
-  "generatedAt": "2026-07-25T04:28:36Z",
+  "version": "39f727b05e3d",
+  "generatedAt": "2026-07-25T04:44:52Z",
   "files": [
     "blue_mountains.avif",
     "circle_grass_green.avif",
@@ -8,17 +8,22 @@
     "desert_view_rocks.avif",
     "grass_tree.avif",
     "gray_dock_lake.avif",
+    "lake_blue_mountains.avif",
     "lake_colors.avif",
     "lake_dock.avif",
     "lake_flowers.avif",
+    "lambs_shepherd.avif",
     "long_road.avif",
     "mountain_pink.avif",
     "mountain_river.avif",
+    "port_city.avif",
+    "praying_swamp.avif",
     "rocks_water.avif",
     "sea_beach.avif",
     "snow_house.avif",
     "snow_mountains.avif",
     "sunset_beach.avif",
-    "sunset_snow.avif"
+    "sunset_snow.avif",
+    "women_bible_defocused.avif"
   ]
 }

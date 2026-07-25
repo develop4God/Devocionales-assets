@@ -8,13 +8,37 @@ from datetime import datetime, timezone
 
 DEVOTIONALS_DIR = 'images/devotionals'
 INDEX_PATH = os.path.join(DEVOTIONALS_DIR, 'index.json')
+ALLOWED_EXTENSION = '.avif'
 
 
 def list_real_files():
+    """Every non-index file in the folder, any extension — used to find
+    wrong-format files (which get deleted before this function's result
+    is trusted for anything else). Not the list that ends up in
+    index.json; see list_avif_files for that."""
     return sorted(
         f for f in os.listdir(DEVOTIONALS_DIR)
         if os.path.isfile(os.path.join(DEVOTIONALS_DIR, f)) and f != 'index.json'
     )
+
+
+def list_avif_files():
+    return sorted(f for f in list_real_files() if f.lower().endswith(ALLOWED_EXTENSION))
+
+
+def remove_wrong_extension_files():
+    """Delete any file that isn't .avif — this repo's images/devotionals/
+    is AVIF-only by convention. Deletes immediately rather than just
+    excluding from the manifest, so a wrong-format file dropped in by
+    mistake doesn't linger in the folder; run locally, you see it happen.
+    In CI this still runs, and main() reports it as a failure (see below)
+    so a deletion is never silent even when nobody's watching the run."""
+    removed = []
+    for f in list_real_files():
+        if not f.lower().endswith(ALLOWED_EXTENSION):
+            os.remove(os.path.join(DEVOTIONALS_DIR, f))
+            removed.append(f)
+    return removed
 
 
 def fingerprint(files):
@@ -39,19 +63,20 @@ def get_dimensions(path):
     return int(match.group(1)), int(match.group(2))
 
 
-def validate_orientation(files):
-    """Reject any non-landscape (width <= height) image before it's ever
-    written into index.json. Landscape-only, no width/resolution
-    threshold — verified against every image currently in this repo that
-    a plain width>height check cleanly separates known-good landscape
-    files (width 870-1332) from known-bad portrait files (width 687-765),
-    with no overlap. Revisit if that assumption stops holding."""
-    bad = []
+def remove_bad_orientation_files(files):
+    """Delete any non-landscape (width <= height) image. Landscape-only,
+    no width/resolution threshold — verified against every image
+    currently in this repo that a plain width>height check cleanly
+    separates known-good landscape files (width 870-1332) from
+    known-bad portrait files (width 687-765), with no overlap. Revisit
+    if that assumption stops holding."""
+    removed = []
     for f in files:
         w, h = get_dimensions(os.path.join(DEVOTIONALS_DIR, f))
         if w <= h:
-            bad.append((f, w, h))
-    return bad
+            os.remove(os.path.join(DEVOTIONALS_DIR, f))
+            removed.append((f, w, h))
+    return removed
 
 
 def load_existing_version():
@@ -65,19 +90,32 @@ def load_existing_version():
 
 
 def main():
-    files = list_real_files()
+    # Wrong-format gate: deletes any non-.avif file immediately, before
+    # attempting to decode anything. Runs first so a stray .jpg doesn't
+    # reach avifdec and produce a confusing decode-failure error instead
+    # of a clear "wrong format" one.
+    removed_ext = remove_wrong_extension_files()
+    if removed_ext:
+        print("REMOVED — wrong file extension (only .avif is allowed):", file=sys.stderr)
+        for f in removed_ext:
+            print(f"  {f}", file=sys.stderr)
 
-    # Orientation gate: run before anything is written, so a bad image
-    # never enters the manifest. Fails the whole job (CI never commits)
-    # rather than silently excluding the file from index.json — a bad
-    # image should be visibly rejected, not quietly dropped.
-    bad_orientation = validate_orientation(files)
-    if bad_orientation:
-        print("ORIENTATION VALIDATION FAILED — non-landscape image(s) found:", file=sys.stderr)
-        for f, w, h in bad_orientation:
-            print(f"  {f}: {w}x{h} (portrait/square, expected landscape)", file=sys.stderr)
+    # Orientation gate: deletes any non-landscape .avif file. Both gates
+    # delete rather than just excluding from the manifest — see each
+    # function's docstring — and either one deleting anything fails this
+    # run (return 1 below) so a deletion is never silent, even in CI.
+    removed_orientation = remove_bad_orientation_files(list_avif_files())
+    if removed_orientation:
+        print("REMOVED — wrong orientation (portrait/square, expected landscape):", file=sys.stderr)
+        for f, w, h in removed_orientation:
+            print(f"  {f}: {w}x{h}", file=sys.stderr)
+
+    if removed_ext or removed_orientation:
+        print("One or more bad files were deleted — re-run to generate index.json "
+              "from the now-clean folder.", file=sys.stderr)
         return 1
 
+    files = list_avif_files()
     new_hash = fingerprint(files)
 
     # Pre-write gate: skip entirely if nothing actually changed since the
@@ -106,7 +144,13 @@ def main():
         written = json.load(fh)
 
     written_files = set(written.get('files', []))
-    real_files = set(list_real_files())  # re-list disk, don't trust the in-memory `files` var
+    # Re-list disk, don't trust the in-memory `files` var. list_avif_files
+    # (not list_real_files) is correct here: by this point both gates
+    # above have already deleted anything that isn't a valid landscape
+    # .avif, so this should exactly match — using list_real_files would
+    # silently reintroduce non-.avif files into the comparison if a gate
+    # above is ever changed to not delete unconditionally.
+    real_files = set(list_avif_files())
 
     missing_from_manifest = real_files - written_files
     phantom_in_manifest = written_files - real_files
