@@ -7,10 +7,18 @@ on:
       - 'images/habitus/**'
       - '.github/scripts/generate_habitus_index.py'
       - '.github/workflows/habitus-index.yml'
+  pull_request:
+    paths:
+      - 'images/habitus/**'
+      - '.github/scripts/generate_habitus_index.py'
+      - '.github/workflows/habitus-index.yml'
+  workflow_dispatch: {}
 
 jobs:
   update-index:
     runs-on: ubuntu-latest
+    # Only needed for the push-to-main path's commit-back step below;
+    # pull_request runs don't push, so this permission is unused there.
     permissions:
       contents: write
     steps:
@@ -22,7 +30,13 @@ jobs:
       - name: Regenerate and validate images/habitus/index.json
         run: python3 .github/scripts/generate_habitus_index.py
 
+      # PRs only need the validation above (orientation gate, reverse
+      # validation) to catch a bad image before merge — they can't safely
+      # push a commit back to an arbitrary PR branch the way a same-repo
+      # push to main can. push and manual workflow_dispatch runs commit
+      # the regenerated index.json; pull_request runs validate only.
       - name: Commit if changed
+        if: github.event_name != 'pull_request'
         run: |
           if git diff --quiet -- images/habitus/index.json; then
             echo "No changes to commit"
