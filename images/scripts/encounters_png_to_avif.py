@@ -379,6 +379,15 @@ def git_commit_and_push(folder: Path, encounter_id: str, dry_run: bool = False):
         return
 
     subprocess.run(["git", "-C", str(repo_root), "add", str(folder)], check=True)
+
+    staged = subprocess.run(
+        ["git", "-C", str(repo_root), "diff", "--staged", "--name-status"],
+        capture_output=True, text=True, check=False,
+    ).stdout.rstrip("\n")
+    print(f"\n→ Staged ({len(staged.splitlines())}):")
+    for line in staged.splitlines():
+        print(f"  {line}")
+
     subprocess.run(["git", "-C", str(repo_root), "commit", "-m", message], check=True)
     subprocess.run(["git", "-C", str(repo_root), "push", "origin", branch], check=True)
     print("✓ Pushed.")
