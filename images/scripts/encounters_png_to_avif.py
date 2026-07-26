@@ -97,8 +97,10 @@ def resolve_repo_branch_path(args):
         branches.sort(key=lambda b: (b != "main", b))
         args.branch = choose_from_list(branches, "Available branches:")
 
+    index_path = "encounters/index.json"
+
     if not args.path:
-        index = fetch_json(args.repo, args.branch, "encounters/index.json")
+        index = fetch_json(args.repo, args.branch, index_path)
         encounters = index.get("encounters", [])
         if not encounters:
             print("✗ No encounters found in encounters/index.json.")
@@ -113,6 +115,19 @@ def resolve_repo_branch_path(args):
             default_folder = IMAGES_ROOT / chosen_id
             if default_folder.is_dir():
                 args.folder = str(default_folder)
+    else:
+        index = fetch_json(args.repo, args.branch, index_path)
+        encounters = index.get("encounters", [])
+        filename = Path(args.path).name
+        encounter = next(
+            (e for e in encounters if any(f == filename for f in e.get("files", {}).values())),
+            None,
+        )
+
+    if encounter is not None:
+        args.intro_image = encounter.get("intro_image")
+        if args.intro_image:
+            args.index_url = RAW_URL_TMPL.format(repo=args.repo, branch=args.branch, path=index_path)
 
     if not args.folder:
         args.folder = prompt("Local images folder path")
@@ -308,7 +323,7 @@ def check_repo_wide_pending(repo_root: Path, folder: Path):
     status = subprocess.run(
         ["git", "-C", str(repo_root), "status", "--porcelain", "-uall"],
         capture_output=True, text=True,
-    ).stdout.strip()
+    ).stdout.rstrip("\n")
     if not status:
         return
     folder_rel = str(folder.relative_to(repo_root))
@@ -339,7 +354,7 @@ def git_commit_and_push(folder: Path, encounter_id: str, dry_run: bool = False):
     status = subprocess.run(
         ["git", "-C", str(repo_root), "status", "--porcelain", "-uall", str(folder)],
         capture_output=True, text=True,
-    ).stdout.strip()
+    ).stdout.rstrip("\n")
 
     if not status:
         print("\n(No git changes to commit.)")
@@ -384,6 +399,15 @@ def cmd_compare(args, data: dict | None = None) -> list[str]:
         data = fetch_json(args.repo, args.branch, args.path)
 
     filenames = extract_image_filenames(data)
+    intro_image = getattr(args, "intro_image", None)
+    if intro_image:
+        index_url = getattr(args, "index_url", None)
+        if intro_image in filenames:
+            print(f"\n→ intro_image '{intro_image}' from index.json ({index_url}) already listed in the encounter JSON — not duplicated.")
+        else:
+            filenames.append(intro_image)
+            print(f"\n→ intro_image '{intro_image}' found in index.json ({index_url}), not in the encounter JSON — added to validation.")
+
     if not filenames:
         print("✗ No 'image_url' fields found in JSON.")
         sys.exit(1)
@@ -434,7 +458,7 @@ def cmd_commit(args):
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Validate + convert Encounter images to AVIF, phase by phase.")
-    p.set_defaults(repo=None, branch=None, path=None, folder=None)
+    p.set_defaults(repo=None, branch=None, path=None, folder=None, intro_image=None, index_url=None)
     sub = p.add_subparsers(dest="phase")
 
     def add_common(sp, needs_folder=True, needs_source=True, dry_run=False):
