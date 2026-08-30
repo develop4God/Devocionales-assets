@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-validate_devotionals.py
+validate_devotional_images.py
 
 Local pre-push validator for images/devotionals/. Runs the exact same
 checks as the CI manifest generator (.github/scripts/generate_devotionals_index.py,
@@ -11,8 +11,8 @@ Report-only by default — nothing is deleted. Pass --fix to actually
 delete wrong-extension/wrong-orientation files, mirroring what CI does.
 
 Run from the repo root:
-  python3 images/scripts/validate_devotionals.py
-  python3 images/scripts/validate_devotionals.py --fix
+  python3 images/scripts/validate_devotional_images.py
+  python3 images/scripts/validate_devotional_images.py --fix
 """
 
 import argparse

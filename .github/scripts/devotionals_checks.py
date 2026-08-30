@@ -1,6 +1,6 @@
 """Shared validation logic for images/devotionals/, used by both the CI
 manifest generator (.github/scripts/generate_devotionals_index.py) and the
-local pre-push validator (images/scripts/validate_devotionals.py). Keeping
+local pre-push validator (images/scripts/validate_devotional_images.py). Keeping
 this in one module means the two can't silently drift apart — CI stays the
 final gate, but the local tool runs the identical checks report-only.
 """
