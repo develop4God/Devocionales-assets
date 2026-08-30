@@ -24,8 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install libavif (avifdec, used for orientation validation)
-        run: sudo apt-get update && sudo apt-get install -y libavif-bin
+      - name: Install Pillow (used for orientation validation)
+        run: pip install --break-system-packages Pillow
 
       - name: Regenerate and validate images/devotionals/index.json
         run: python3 .github/scripts/generate_devotionals_index.py
