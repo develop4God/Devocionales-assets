@@ -7,9 +7,9 @@ Pipeline for Encounters image assets:
   2. Fetch encounters/index.json from that branch and let the user pick an encounter + language.
   3. Extract every "image_url" filename referenced in the JSON.
   4. Validate against the matching local images folder (missing / extra files).
-  5. If validation passes, convert all PNGs to AVIF (avifenc, slowest/best quality,
-     original resolution, 4:4:4 chroma).
-  6. Reverse-validate: every source PNG has a matching .avif output.
+  5. If validation passes, convert all PNGs to AVIF (default, avifenc
+     slowest/best quality, 4:4:4 chroma) or WebP (--format webp, cwebp), original resolution.
+  6. Reverse-validate: every source PNG has a matching output file.
   7. Print a size/compression stats table.
 
 Runs as phases (each can be run standalone), or all together with no subcommand.
@@ -26,12 +26,12 @@ Runs as phases (each can be run standalone), or all together with no subcommand.
   python3 encounter_images.py commit --folder /path/to/images/encounters/nicodemus_001
 
 The `commit` phase only needs --folder: it stages/commits/pushes whatever is
-already sitting in that folder (PNG+AVIF pairs already produced), asking for
+already sitting in that folder (PNG + converted pairs already produced), asking for
 confirmation before pushing. Use this when images are already converted and
 you just need to commit + push.
 
 Requires: requests (pip install requests --break-system-packages)
-Requires on PATH: avifenc
+Requires on PATH: cwebp (webp) and/or avifenc (avif)
 """
 
 import argparse
@@ -47,6 +47,34 @@ import requests
 RAW_URL_TMPL = "https://raw.githubusercontent.com/{repo}/{branch}/{path}"
 API_BRANCHES_TMPL = "https://api.github.com/repos/{repo}/branches"
 IMAGES_ROOT = Path(__file__).resolve().parent.parent / "encounters"
+
+# Output format registry: extension, required binary, install hint, and a
+# command builder (src, dst) -> argv. Add a new entry to support another format.
+FORMATS = {
+    "webp": {
+        "ext": ".webp",
+        "binary": "cwebp",
+        "install": "sudo apt install webp",
+        "label": "WebP",
+        "desc": "q 80, method 6, sharp_yuv, alpha_q 100",
+        "cmd": lambda src, dst: [
+            "cwebp", "-q", "80", "-m", "6", "-sharp_yuv",
+            "-alpha_q", "100", str(src), "-o", str(dst),
+        ],
+    },
+    "avif": {
+        "ext": ".avif",
+        "binary": "avifenc",
+        "install": "sudo apt install libavif-bin",
+        "label": "AVIF",
+        "desc": "speed 0, qcolor 75, qalpha 75, yuv444",
+        "cmd": lambda src, dst: [
+            "avifenc", "--speed", "0", "--qcolor", "75",
+            "--qalpha", "75", "--yuv", "444", str(src), str(dst),
+        ],
+    },
+}
+DEFAULT_FORMAT = "avif"
 
 
 def prompt(msg: str, default: str = "") -> str:
@@ -195,26 +223,28 @@ def human_size(num_bytes: int) -> str:
     return f"{num_bytes:.1f}TB"
 
 
-def convert_to_avif(filenames: list[str], folder: Path, dry_run: bool = False) -> Path:
-    """Convert PNGs to AVIF in-place (same folder, no subfolder).
-    Skips files whose .avif already exists and is newer than the source PNG.
+def convert_images(filenames: list[str], folder: Path, fmt: str = DEFAULT_FORMAT, dry_run: bool = False) -> Path:
+    """Convert PNGs to the chosen format in-place (same folder, no subfolder).
+    Skips files whose output already exists and is newer than the source PNG.
     """
-    if not shutil.which("avifenc"):
-        print("\n✗ avifenc not found on PATH. Install it first (e.g. `sudo apt install libavif-bin`).")
+    spec = FORMATS[fmt]
+    ext = spec["ext"]
+    if not shutil.which(spec["binary"]):
+        print(f"\n✗ {spec['binary']} not found on PATH. Install it first (e.g. `{spec['install']}`).")
         sys.exit(1)
 
     to_convert = []
     skipped = []
     for name in filenames:
         src = folder / name
-        dst = folder / (Path(name).stem + ".avif")
+        dst = folder / (Path(name).stem + ext)
         if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
             skipped.append(name)
         else:
             to_convert.append(name)
 
     if skipped:
-        print(f"\n→ Skipping {len(skipped)} unchanged PNG(s) (AVIF already up to date):")
+        print(f"\n→ Skipping {len(skipped)} unchanged PNG(s) ({spec['label']} already up to date):")
         for name in skipped:
             print(f"  ⊘ {name}")
 
@@ -223,23 +253,14 @@ def convert_to_avif(filenames: list[str], folder: Path, dry_run: bool = False) -
         return folder
 
     verb = "Would convert" if dry_run else "Converting"
-    print(f"\n→ {verb} {len(to_convert)} PNGs to AVIF (speed 0, qcolor 75, qalpha 75, yuv444)...")
+    print(f"\n→ {verb} {len(to_convert)} PNGs to {spec['label']} ({spec['desc']})...")
     for name in to_convert:
         src = folder / name
-        dst = folder / (Path(name).stem + ".avif")
+        dst = folder / (Path(name).stem + ext)
         if dry_run:
             print(f"  → {name} -> {dst.name} (dry-run, skipped)")
             continue
-        cmd = [
-            "avifenc",
-            "--speed", "0",
-            "--qcolor", "75",
-            "--qalpha", "75",
-            "--yuv", "444",
-            str(src),
-            str(dst),
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(spec["cmd"](src, dst), capture_output=True, text=True)
         if result.returncode != 0:
             print(f"  ✗ FAILED {name}\n{result.stderr}")
         else:
@@ -248,40 +269,42 @@ def convert_to_avif(filenames: list[str], folder: Path, dry_run: bool = False) -
     return folder
 
 
-def reverse_validate_and_stats(filenames: list[str], folder: Path, out_dir: Path) -> bool:
+def reverse_validate_and_stats(filenames: list[str], folder: Path, out_dir: Path, fmt: str = DEFAULT_FORMAT) -> bool:
+    spec = FORMATS[fmt]
+    ext, label = spec["ext"], spec["label"]
     print("\n→ Reverse validation + stats:\n")
-    header = f"{'File':40} {'PNG':>10} {'AVIF':>10} {'Saved':>8}"
+    header = f"{'File':40} {'PNG':>10} {label:>10} {'Saved':>8}"
     print(header)
     print("-" * len(header))
 
     total_png = 0
-    total_avif = 0
+    total_out = 0
     all_ok = True
 
     for name in filenames:
         png_path = folder / name
-        avif_path = out_dir / (Path(name).stem + ".avif")
+        out_path = out_dir / (Path(name).stem + ext)
 
-        if not avif_path.exists():
-            print(f"{name:40} {'MISSING AVIF':>10}")
+        if not out_path.exists():
+            print(f"{name:40} {'MISSING ' + label:>10}")
             all_ok = False
             continue
 
         png_size = png_path.stat().st_size
-        avif_size = avif_path.stat().st_size
-        saved_pct = 100 * (1 - avif_size / png_size) if png_size else 0
+        out_size = out_path.stat().st_size
+        saved_pct = 100 * (1 - out_size / png_size) if png_size else 0
 
         total_png += png_size
-        total_avif += avif_size
+        total_out += out_size
 
-        print(f"{name:40} {human_size(png_size):>10} {human_size(avif_size):>10} {saved_pct:7.1f}%")
+        print(f"{name:40} {human_size(png_size):>10} {human_size(out_size):>10} {saved_pct:7.1f}%")
 
     print("-" * len(header))
     if total_png:
-        total_saved_pct = 100 * (1 - total_avif / total_png)
-        print(f"{'TOTAL':40} {human_size(total_png):>10} {human_size(total_avif):>10} {total_saved_pct:7.1f}%")
+        total_saved_pct = 100 * (1 - total_out / total_png)
+        print(f"{'TOTAL':40} {human_size(total_png):>10} {human_size(total_out):>10} {total_saved_pct:7.1f}%")
 
-    print(f"\n{'✓ All AVIF files present.' if all_ok else '✗ Some AVIF files are missing — check log above.'}")
+    print(f"\n{'✓ All ' + label + ' files present.' if all_ok else '✗ Some ' + label + ' files are missing — check log above.'}")
     return all_ok
 
 
@@ -338,7 +361,7 @@ def check_repo_wide_pending(repo_root: Path, folder: Path):
             sys.exit(1)
 
 
-def git_commit_and_push(folder: Path, encounter_id: str, dry_run: bool = False):
+def git_commit_and_push(folder: Path, encounter_id: str, fmt: str = DEFAULT_FORMAT, dry_run: bool = False):
     repo_root = git_repo_root(folder)
     if repo_root is None:
         print("\n(Skipping git commit — folder is not inside a git repo.)")
@@ -361,7 +384,7 @@ def git_commit_and_push(folder: Path, encounter_id: str, dry_run: bool = False):
         return
 
     file_lines = describe_status(status)
-    message = f"feat({encounter_id}): add encounter images and AVIF conversions"
+    message = f"feat({encounter_id}): add encounter images and {FORMATS[fmt]['label']} conversions"
 
     print(f"\n→ Branch: {branch}")
     print(f"→ Files to commit ({len(file_lines)}):")
@@ -431,6 +454,14 @@ def cmd_compare(args, data: dict | None = None) -> list[str]:
     return filenames
 
 
+def resolve_format(args) -> str:
+    """Return the chosen format, asking via menu when --format was not given."""
+    if not getattr(args, "format", None):
+        options = [DEFAULT_FORMAT] + [f for f in FORMATS if f != DEFAULT_FORMAT]
+        args.format = choose_from_list(options, "Output image format:")
+    return args.format
+
+
 def cmd_convert(args, filenames: list[str] | None = None):
     folder = Path(args.folder).expanduser()
     if not folder.is_dir():
@@ -444,16 +475,17 @@ def cmd_convert(args, filenames: list[str] | None = None):
             sys.exit(1)
 
     dry_run = getattr(args, "dry_run", False)
-    out_dir = convert_to_avif(filenames, folder, dry_run=dry_run)
+    fmt = resolve_format(args)
+    out_dir = convert_images(filenames, folder, fmt=fmt, dry_run=dry_run)
 
     if dry_run:
         print("\n(Dry run — skipping reverse validation.)")
         return
 
-    all_ok = reverse_validate_and_stats(filenames, folder, out_dir)
+    all_ok = reverse_validate_and_stats(filenames, folder, out_dir, fmt=fmt)
 
     if not all_ok:
-        print("\n✗ Not all PNGs have a corresponding AVIF.")
+        print(f"\n✗ Not all PNGs have a corresponding {FORMATS[fmt]['label']} file.")
         sys.exit(1)
 
 
@@ -462,11 +494,11 @@ def cmd_commit(args):
     if not folder.is_dir():
         print(f"✗ Folder not found: {folder}")
         sys.exit(1)
-    git_commit_and_push(folder, folder.name, dry_run=getattr(args, "dry_run", False))
+    git_commit_and_push(folder, folder.name, fmt=getattr(args, "format", DEFAULT_FORMAT), dry_run=getattr(args, "dry_run", False))
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Validate + convert Encounter images to AVIF, phase by phase.")
+    p = argparse.ArgumentParser(description="Validate + convert Encounter images to WebP/AVIF, phase by phase.")
     p.set_defaults(repo=None, branch=None, path=None, folder=None, intro_image=None, index_url=None)
     sub = p.add_subparsers(dest="phase")
 
@@ -478,12 +510,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         if needs_folder:
             sp.add_argument("--folder", help="Local images folder path")
         if dry_run:
+            sp.add_argument("--format", choices=sorted(FORMATS), default=None,
+                            help="Output image format (asked interactively if omitted)")
             sp.add_argument("--dry-run", action="store_true", help="Preview actions without executing them")
 
     add_common(sub.add_parser("all", help="Run fetch -> compare -> convert -> commit"), dry_run=True)
     add_common(sub.add_parser("fetch", help="Fetch the encounter JSON only"), needs_folder=False)
     add_common(sub.add_parser("compare", help="Validate local folder against JSON image_url list"))
-    add_common(sub.add_parser("convert", help="Convert PNGs to AVIF + reverse-validate"), dry_run=True)
+    add_common(sub.add_parser("convert", help="Convert PNGs to WebP/AVIF + reverse-validate"), dry_run=True)
     add_common(sub.add_parser("commit", help="Commit + push an already-converted folder"), needs_source=False, dry_run=True)
 
     return p
@@ -512,6 +546,7 @@ def main():
     if phase == "commit":
         if not args.folder:
             args.folder = prompt("Local images folder path")
+        resolve_format(args)
         cmd_commit(args)
         return
 
